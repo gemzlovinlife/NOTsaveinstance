@@ -12,7 +12,9 @@
 
 local service = setmetatable({}, {
 	__index = function(self, index)
-		local Service = game:GetService(index) or settings():GetService(index) or UserSettings():GetService(index)
+		local Service = game:GetService(index)
+			or (settings and settings():GetService(index))
+			or (UserSettings and UserSettings():GetService(index))
 		self[index] = Service
 		return Service
 	end,
@@ -747,7 +749,11 @@ XML_Descriptors = {
 		end)
 	end,
 	Content = function(raw)
-		return raw == "" and "<null></null>" or "<url>" .. XML_Descriptors.string(raw, true) .. "</url>"
+		local str = type(raw) == "string" and raw or tostring(raw)
+		return str == "" and "<null></null>" or "<url>" .. XML_Descriptors.string(str, true) .. "</url>"
+	end,
+	ContentId = function(raw)
+		return tostring(raw)
 	end,
 	CoordinateFrame = function(raw)
 		return "<CFrame>" .. XML_Descriptors.CFrame(raw) .. "</CFrame>"
@@ -856,6 +862,9 @@ XML_Descriptors = {
 	end,
 	int64 = nil,
 	string = function(raw, skipEmptyCheck)
+		if type(raw) ~= "string" then
+			raw = tostring(raw)
+		end
 		return not skipEmptyCheck and raw == "" and raw
 			or string_find(raw, "]]>") and string.gsub(raw, ESCAPES_PATTERN, ESCAPES)
 			or XML_Descriptors.__CDATA(string.gsub(raw, "\0", ""))
@@ -894,13 +903,18 @@ do
 			end
 		end
 
-		if not API_Dump then -- official CDN, matched to this exact client build
-			for _, url in
-				{
-					"https://setup.rbxcdn.com/" .. VERSIONS .. "-Full-API-Dump.json",
-					"https://setup.rbxcdn.com/versionQTStudio-Full-API-Dump.json",
-				}
-			do
+		if not API_Dump then -- official CDN, resolved to this exact client build
+			local urls = {}
+
+			local ok, current = pcall(game.HttpGet, game, "https://setup.rbxcdn.com/versionQTStudio", true)
+			if ok and type(current) == "string" and string.find(current, "version") then
+				table.insert(urls, "https://setup.rbxcdn.com/" .. current .. "-Full-API-Dump.json")
+			end
+			if string.find(VERSIONS, "version") then
+				table.insert(urls, "https://setup.rbxcdn.com/" .. VERSIONS .. "-Full-API-Dump.json")
+			end
+
+			for _, url in urls do
 				local ok, result = pcall(game.HttpGet, game, url, true)
 				if ok and type(result) == "string" and string.sub(result, 1, 1) == "{" then
 					API_Dump = result
@@ -1873,9 +1887,11 @@ local function synsaveinstance(CustomOptions, CustomOptions2)
 	end
 
 	local function ReturnValueAndTag(raw, valueType, descriptor)
-		local value, tag = (descriptor or XML_Descriptors[valueType])(raw)
-
-		return value, tag == nil and valueType or tag
+		local ok, value, tag = pcall(descriptor or XML_Descriptors[valueType], raw)
+		if ok then
+			return value, tag == nil and valueType or tag
+		end
+		return tostring(raw), "string"
 	end
 
 	local function InheritsFix(fixes, className, instance)
